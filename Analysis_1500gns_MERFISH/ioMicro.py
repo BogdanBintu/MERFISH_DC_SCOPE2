@@ -606,14 +606,42 @@ class analysis_smFISH():
         if plt_val:
             import napari
             napari.view_image(self.im_ration,contrast_limits=[0,0.7])
-    def get_Xh(self,th = 4,s=30,dic_psf=None,normalized=False):
+    def get_Xh_simple(self,th = 4,s=30,dic_psf=None,normalized=False):
         resc=  5
         self.Xhs = []
         for im_raw in self.im_sig_[:-1]:
             im_ = norm_slice(im_raw,s=s)
             th_ = np.std(im_[::resc,::resc,::resc])*th
             self.Xhs.append(get_local_max(im_,th_,im_raw=im_raw,dic_psf=dic_psf))
-                   
+    def get_Xh(self,th = 5,s=30,dic_psf=None,subtract_bk=False,trim0=True,fr=1.25):
+        """
+        This fits each color image and saves the results in self.Xhs.
+        It employs "get_local_max"
+        """
+        resc=  5
+        self.Xhs = []
+        self.plot_ims = []
+        for icol in range(self.ncols-1):
+            print("Fitting color "+str(icol))
+            if subtract_bk:
+                imsg = self.im_sig__[icol].astype(np.float32)
+                imbk = self.im_bk__[icol].astype(np.float32)
+                #fr = np.min([1.25,np.median(imsg[::resc,::resc,::resc]/imbk[::resc,::resc,::resc])])
+                
+                im_raw = imsg-imbk*fr
+                im_raw = im_raw-np.median(im_raw)
+                if trim0:
+                    im_raw[im_raw<0]=0
+            else:
+                im_raw = self.im_sig_[icol]
+            im_ = norm_slice(im_raw,s=s)
+            std_=np.std(im_[::resc,::resc,::resc])
+            #std_ = np.median(np.abs(im_[::resc,::resc,::resc] - np.median(im_[::resc,::resc,::resc])))
+            #th_ = std_*th
+            th_=th
+            self.plot_ims.append(np.max(im_,0))
+            self.Xhs.append(get_local_max(im_,th_,im_raw=im_raw,dic_psf=dic_psf))
+        self.plot_ims = np.array(self.plot_ims)               
     def check_finished_file(self):
         file_sig = self.fl
         save_folder = self.save_folder
@@ -622,24 +650,24 @@ class analysis_smFISH():
         self.base_save = self.save_folder+os.sep+fov_+'--'+hfld_
         self.Xh_fl = self.base_save+'--'+'_Xh_RNAs.pkl'
         return os.path.exists(self.Xh_fl)
-    def save_fits(self,icols=None,plt_val=True):
+    def save_fits(self,icols=None,plt_val=True,save_max=False):
         if plt_val:
             if icols is None:
                 icols =  range(self.ncols-1)
             for icol in icols:
 
                 fig = plt.figure(figsize=(40,40))
-                im_t = self.im_ration[icol]
-                if False:
-                    Xh = self.Xhs[icol]
-                    H = Xh[:,-1]
-                    vmax = np.median(np.sort(H)[-npts:])
-                vmax = self.dic_th.get(icol,1)
-                plt.imshow(np.max(im_t,0),vmin=0,vmax=vmax,cmap='gray')
+                if not hasattr(self,'dic_th'): self.dic_th={}
+                vmax = self.dic_th.get(icol,3000)
+                #std = np.std(self.plot_ims[icol])
+                plt.imshow(self.plot_ims[icol],vmin=0,vmax=vmax,cmap='gray')
                 #plt.show()
                 fig.savefig(self.base_save+'_signal-col'+str(icol)+'.png')
                 plt.close('all')
+        if save_max:
+            np.savez_compressed(self.base_save+'_plot_ims.npz',plot_ims = self.plot_ims)
         pickle.dump([self.Xhs,self.dic_drift],open(self.Xh_fl,'wb'))
+        
 def get_best_trans(Xh1,Xh2,th_h=1,th_dist = 2,return_pairs=False):
     mdelta = np.array([np.nan,np.nan,np.nan])
     if len(Xh1)==0 or len(Xh2)==0:
