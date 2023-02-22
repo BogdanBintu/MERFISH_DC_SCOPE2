@@ -217,10 +217,17 @@ def converge(cells1,cells2):
         im_sm = imlab2[ym:ym+sy,xm:xm+sx]
         imlab2_[ym:ym+sy,xm:xm+sx][im_sm==icl]=count_cell
     return imlab1,imlab2_
+def load_segm(self):
+    analysis_folder = self.save_folder
+    fl_dapi = self.fl_bk
+    segm_folder = analysis_folder+os.sep+'Segmentation'
+    save_fl  = segm_folder+os.sep+os.path.basename(fl_dapi).split('.')[0]+'--'+os.path.basename(os.path.dirname(fl_dapi))+'--dapi_segm.npz'
+    self.im_segm,self.shape = np.load(save_fl)['segm'],np.load(save_fl)['shape']
+    self.im_segmf = resize(self.im_segm,self.shape)
 def final_segmentation(fl_dapi,
                         analysis_folder=r'X:\DCBB_human__11_18_2022_Analysis',
-                        plt_val=True,
-                        rescz = 4,trimz=2, resc=4,p99=None):
+                        plt_val=True,subtr_bk=0,
+                        rescz = 4,trimz=2, resc=4,p99=None,use_3d_cellpose=False):
     segm_folder = analysis_folder+os.sep+'Segmentation'
     if not os.path.exists(segm_folder): os.makedirs(segm_folder)
     
@@ -230,8 +237,11 @@ def final_segmentation(fl_dapi,
         im = read_im(fl_dapi)
         #im_mid_dapi = np.array(im[-1][im.shape[1]//2],dtype=np.float32)
         im_dapi = im[-1,::rescz][trimz:-trimz]
-        
-        im_seg_2 = standard_segmentation(im_dapi,resc=resc,sz_min_2d=100,sz_cell=20,use_gpu=True,model='cyto2',p99=p99)
+        if subtr_bk:
+            im_bk = im[-2,::rescz][trimz:-trimz]
+        else:
+            im_bk = None
+        im_seg_2 = standard_segmentation(im_dapi,im_bk=im_bk,subtr_bk=subtr_bk,resc=resc,sz_min_2d=100,use_3d_cellpose=use_3d_cellpose,sz_cell=20,use_gpu=True,model='cyto2',p99=p99)
         shape = np.array(im[-1].shape)
         np.savez_compressed(save_fl,segm = im_seg_2,shape = shape)
 
@@ -260,7 +270,7 @@ def final_segmentation(fl_dapi,
             fig.savefig(fl_png)
             plt.close('all')
             print("Saved file:"+fl_png)
-def standard_segmentation(im_dapi,resc=2,sz_min_2d=400,sz_cell=25,use_gpu=True,model='cyto2',p99=None):
+def standard_segmentation(im_dapi,im_bk=None,subtr_bk=0,resc=2,sz_min_2d=400,sz_cell=25,use_gpu=True,model='cyto2',p99=None,use_3d_cellpose=False):
     """Using cellpose with nuclei mode"""
     from cellpose import models, io,utils
     model = models.Cellpose(gpu=use_gpu, model_type=model)
@@ -270,40 +280,57 @@ def standard_segmentation(im_dapi,resc=2,sz_min_2d=400,sz_cell=25,use_gpu=True,m
     masks_all = []
     flows_all = []
     from tqdm import tqdm
-    for im in tqdm(im_dapi):
+    for iim in tqdm(np.arange(len(im_dapi))):
+        im = im_dapi[iim]
         im_ = np.array(im,dtype=np.float32)
-        img = (cv2.blur(im_,(2,2))-cv2.blur(im_,(50,50)))[::resc,::resc]
+        if im_bk is not None:
+            imT = np.array(im_bk[iim],dtype=np.float32)
+            im_=im_-imT*subtr_bk
+            im_[im_<0]=0
+        
+        img = (cv2.blur(im_,(2,2))-cv2.blur(im_,(350,350)))[::resc,::resc]
         p1 = np.percentile(img,1)
         if p99 is None:
             p99 = np.percentile(img,99.9)
         img = np.array(np.clip((img-p1)/(p99-p1),0,1),dtype=np.float32)
         masks, flows, styles, diams = model.eval(img, diameter=sz_cell, channels=chan,
                                              flow_threshold=0,cellprob_threshold=0,min_size=50,normalize=False)
+                                             
+        from scipy import ndimage as nd
+        ielems = np.unique(masks)
+        mns = nd.mean(img,labels=masks,index=ielems)
+        th = np.mean(img[masks==0])+2*np.std(img[masks==0])
+        bad = ielems[mns<th]
+        isbad= np.in1d(masks,bad).reshape(masks.shape)
+        masks[isbad]=0
         masks_all.append(utils.fill_holes_and_remove_small_masks(masks,min_size=sz_min_2d))#,hole_size=3
         flows_all.append(flows[0])
     masks_all = np.array(masks_all)
-
-    sec_half = list(np.arange(int(len(masks_all)/2),len(masks_all)-1))
-    first_half = list(np.arange(0,int(len(masks_all)/2)))[::-1]
-    indexes = first_half+sec_half
-    masks_all_cp = masks_all.copy()
-    max_split = 1
-    niter = 0
-    while max_split>0 and niter<2:
-        max_split = 0
-        for index in tqdm(indexes):
-            cells1,cells2 = masks_all_cp[index],masks_all_cp[index+1]
-            imlab1_,infos1_,cms1_,no1 = resplit(cells1,cells2)
-            imlab2_,infos2_,cms2_,no2 = resplit(cells2,cells1)
-            masks_all_cp[index],masks_all_cp[index+1] = imlab1_,imlab2_
-            max_split += max(no1,no2)
-            #print(no1,no2)
-        niter+=1
-    masks_all_cpf = masks_all_cp.copy()
-    for index in tqdm(range(len(masks_all_cpf)-1)):
-        cells1,cells2 = masks_all_cpf[index],masks_all_cpf[index+1]
-        cells1_,cells2_ = converge(cells1,cells2)
-        masks_all_cpf[index+1]=cells2_
+    if use_3d_cellpose:
+        from cellpose import utils
+        masks_all_cpf = utils.stitch3D(masks_all,stitch_threshold=0.25)
+    else:
+        sec_half = list(np.arange(int(len(masks_all)/2),len(masks_all)-1))
+        first_half = list(np.arange(0,int(len(masks_all)/2)))[::-1]
+        indexes = first_half+sec_half
+        masks_all_cp = masks_all.copy()
+        max_split = 1
+        niter = 0
+        while max_split>0 and niter<2:
+            max_split = 0
+            for index in tqdm(indexes):
+                cells1,cells2 = masks_all_cp[index],masks_all_cp[index+1]
+                imlab1_,infos1_,cms1_,no1 = resplit(cells1,cells2)
+                imlab2_,infos2_,cms2_,no2 = resplit(cells2,cells1)
+                masks_all_cp[index],masks_all_cp[index+1] = imlab1_,imlab2_
+                max_split += max(no1,no2)
+                #print(no1,no2)
+            niter+=1
+        masks_all_cpf = masks_all_cp.copy()
+        for index in tqdm(range(len(masks_all_cpf)-1)):
+            cells1,cells2 = masks_all_cpf[index],masks_all_cpf[index+1]
+            cells1_,cells2_ = converge(cells1,cells2)
+            masks_all_cpf[index+1]=cells2_
     return masks_all_cpf
 
 def get_dif_or_ratio(im_sig__,im_bk__,sx=20,sy=20,pad=5,col_align=-2):
