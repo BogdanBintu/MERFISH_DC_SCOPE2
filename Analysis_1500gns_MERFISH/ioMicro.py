@@ -429,7 +429,7 @@ def get_txyz_small(im0_,im1_,sz_norm=10,plt_val=False,return_cor=False):
     return txyz
 
 
-def get_local_max(im_dif,th_fit,im_raw=None,dic_psf=None,delta=1,delta_fit=3,dbscan=True,return_centers=False,mins=None):
+def get_local_max(im_dif,th_fit,im_raw=None,dic_psf=None,delta=1,delta_fit=3,dbscan=True,return_centers=False,mins=None,sigmaZ=1,sigmaXY=1.5):
     """Given a 3D image <im_dif> as numpy array, get the local maxima in cube -<delta>_to_<delta> in 3D.
     Optional a dbscan can be used to couple connected pixels with the same local maximum. 
     (This is important if saturating the camera values.)
@@ -517,10 +517,20 @@ def get_local_max(im_dif,th_fit,im_raw=None,dic_psf=None,delta=1,delta_fit=3,dbs
             im_centers__ = (im_centers__-np.mean(im_centers__,axis=-1)[:,np.newaxis])/np.std(im_centers__,axis=-1)[:,np.newaxis]
             hn = np.mean(im_centers__*im_psf_,axis=-1)
         else:
-            sigma = 1
-            norm_G = np.exp(-np.sum(Xft*Xft,axis=-1)/2./sigma/sigma)
-            norm_G = norm_G/np.sum(norm_G)
-            hn = np.sum(im_centers_[-1]*norm_G[...,np.newaxis],axis=0)
+            
+
+            #im_sm = im_[tuple([slice(x_-sz,x_+sz+1) for x_ in Xc])]
+            sz = delta_fit
+            Xft = (np.indices([2*sz+1]*3)-sz).reshape([3,-1]).T
+            Xft = Xft[np.linalg.norm(Xft,axis=1)<=sz]
+            
+            sigma = np.array([sigmaZ,sigmaXY,sigmaXY])[np.newaxis]
+            Xft_ = Xft/sigma
+            norm_G = np.exp(-np.sum(Xft_*Xft_,axis=-1)/2.)
+            norm_G=(norm_G-np.mean(norm_G))/np.std(norm_G)
+            im_centers__ = im_centers_[3].T.copy()
+            im_centers__ = (im_centers__-np.mean(im_centers__,axis=-1)[:,np.newaxis])/np.std(im_centers__,axis=-1)[:,np.newaxis]
+            hn = np.mean(im_centers__*norm_G,axis=-1)
         
         zc = np.sum(im_centers_[0]*im_centers_[3],axis=0)/np.sum(im_centers_[3],axis=0)
         xc = np.sum(im_centers_[1]*im_centers_[3],axis=0)/np.sum(im_centers_[3],axis=0)
@@ -1185,6 +1195,38 @@ def get_Xwarp(x_ch,X,T,nneigh=50,sgaus=100):
     #TF[bad] = np.median(TF[~bad],axis=0)
     XF = x_ch+TF
     return XF
+def compute_hybe_drift(dic_comp,npoint=50,ncols=3,color=1):
+    """
+    Given list of difference of points in dic_comp
+    this will compute the best drift
+    
+    """
+    
+    iHs = list(np.unique([iH for iHjH in list(dic_comp.keys()) for iH in iHjH]))
+    iHs = [iH for iH in iHs if (iH%ncols)==color]
+    nH = len(iHs)
+    #for i in range(len())
+    a = [np.zeros(nH)]
+    a[0][nH//2]=1
+    b = [[0,0,0]]
+    count=1
+    
+    for (iH,jH) in dic_comp:
+        if (iH in iHs) and (jH in iHs):
+            X = dic_comp[(iH,jH)]
+            if len(X)>npoint:
+                b_ = np.mean(X,axis=0)
+                b.append(b_)
+                arow = np.zeros(nH)
+                iH_,jH_=iHs.index(iH),iHs.index(jH)
+                arow[iH_],arow[jH_]=1,-1
+                a.append(arow)
+                count+=1
+    a=np.array(a)
+    b=np.array(b)
+    res = np.linalg.lstsq(a,b)[0]
+    drift_hybe = {iH:res[iH_]for iH_,iH in enumerate(iHs)}
+    return drift_hybe
 class decoder():
     def __init__(self,analysis_folder = r'\\132.239.200.33\Raw_data\DCBB_MER250__12_2_2022_Analysis',force=False):
         """
@@ -1290,7 +1332,7 @@ class decoder():
             cts_all.append(ctsf)
         cts_all = np.array(cts_all)
         return cts_all
-    def load_library(self,lib_fl = r'codebook_DCBB250.csv'):
+    def load_library(self,lib_fl = r'Z:\DCBBL1_3_2_2023\MERFISH_Analysis\codebook_0_New_DCBB-300_MERFISH_encoding_2_21_2023.csv',nblanks=-1):
         code_txt = np.array([ln.replace('\n','').split(',') for ln in open(lib_fl,'r') if ',' in ln])
         gns = code_txt[1:,0]
         code_01 = code_txt[1:,2:].astype(int)
@@ -1298,21 +1340,22 @@ class decoder():
         codes_ = [list(np.sort(cd)) for cd in codes]
         nbits = np.max(codes)+1
 
-
-
-        ### get extrablanks
-        from itertools import combinations
-        X_codes = np.array((list(combinations(range(nbits),4))))
-        X_code_01 = []
-        for cd in X_codes:
-            l_ = np.zeros(nbits)
-            l_[cd] = 1
-            X_code_01.append(l_)
-        X_code_01 = np.array(X_code_01,dtype=int)
-        from scipy.spatial.distance import cdist
-        eblanks = np.where(np.min(cdist(code_01,X_code_01,metric='hamming'),0)>=4/float(nbits))[0]
-        codes__ = codes_ + [list(e)for e in X_codes[eblanks]]
-        gns__ = list(gns)+ ['blanke'+str(ign+1).zfill(4) for ign in range(len(eblanks))]
+        codes__ = codes_
+        gns__ = list(gns)
+        if nblanks>=0:
+            ### get extrablanks
+            from itertools import combinations
+            X_codes = np.array((list(combinations(range(nbits),4))))
+            X_code_01 = []
+            for cd in X_codes:
+                l_ = np.zeros(nbits)
+                l_[cd] = 1
+                X_code_01.append(l_)
+            X_code_01 = np.array(X_code_01,dtype=int)
+            from scipy.spatial.distance import cdist
+            eblanks = np.where(np.min(cdist(code_01,X_code_01,metric='hamming'),0)>=4/float(nbits))[0]
+            codes__ = codes_ + [list(e)for e in X_codes[eblanks]]
+            gns__ = list(gns)+ ['blanke'+str(ign+1).zfill(4) for ign in range(len(eblanks))]
         
         bad_gns = np.array(['blank' in e for e in gns__])
         good_gns = np.where(~bad_gns)[0]
@@ -1326,7 +1369,9 @@ class decoder():
         self.bad_gns = bad_gns ### indices of the blank codes
         self.good_gns = good_gns ### indices of the good gene codes
         self.codes__ = codes__ ### final extended codes of form [bit1,bit2,bit3,bit4]
-        self.codes_01 = np.concatenate([code_01,X_code_01[eblanks]],axis=0) ### final extended codes of form [0,1,0,0,1...]
+        self.codes_01 = code_01
+        if nblanks>=0:
+            self.codes_01 = np.concatenate([code_01,X_code_01[eblanks]],axis=0) ### final extended codes of form [0,1,0,0,1...]
         
         dic_bit_to_code = {}
         for icd,cd in enumerate(self.codes__): 
@@ -1334,12 +1379,23 @@ class decoder():
                 if bit not in dic_bit_to_code: dic_bit_to_code[bit]=[]
                 dic_bit_to_code[bit].append(icd)
         self.dic_bit_to_code = dic_bit_to_code  ### a dictinary in which each bit is mapped to the inde of a code
-    def get_inters(self,dinstance_th=3):
+    def get_inters(self,dinstance_th=2,enforce_color=False):
         """Get an initial intersection of points and save in self.res"""
-        XH = self.XH
-        Xs = XH[:,:3]
-        Ts = cKDTree(Xs)
-        res = Ts.query_ball_tree(Ts,dinstance_th)
+        res =[]
+        if enforce_color:
+            icols = self.XH[:,-2]
+            XH = self.XH
+            for icol in tqdm(np.unique(icols)):
+                inds = np.where(icols==icol)[0]
+                Xs = XH[inds,:3]
+                Ts = cKDTree(Xs)
+                res_ = Ts.query_ball_tree(Ts,dinstance_th)
+                res += [inds[r] for r in res_]
+        else:
+            XH = self.XH
+            Xs = XH[:,:3]
+            Ts = cKDTree(Xs)
+            res = Ts.query_ball_tree(Ts,dinstance_th)
         self.res = res
     def apply_distortion_correction(self):
         """
