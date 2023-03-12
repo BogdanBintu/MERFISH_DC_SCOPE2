@@ -31,32 +31,39 @@ def compute_fits(save_folder,fov,all_flds,redo=False):
 def main_f(set_ifov):
     save_folder =r'Y:\DCBBL1_3_2_2023\MERFISH_Analysis'
     if not os.path.exists(save_folder): os.makedirs(save_folder)
-    all_flds = ['Z:\\DCBBL1_3_2_2023\\Controls\\H0_set1',
-       'Z:\\DCBBL1_3_2_2023\\Controls\\H1_Igfbp_Aldh1l1_Ptbp1_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H1_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H2_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H3_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H4_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H5_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H6_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H7_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H8_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H9_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H10_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H11_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H12_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H13_MER_set1',
-       'Z:\\DCBBL1_3_2_2023\\MERFISH\\H14_MER_set1']
+    all_flds = [r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\Controls\H0_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\Controls\H1_Igfbp_Aldh1l1_Ptbp1_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H1_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H2_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H3_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H4_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H5_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H6_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H7_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H8_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H9_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H10_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H11_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H12_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H13_MER_set1',
+       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H14_MER_set1'
+       r'\\192.168.0.3\bbfishdc10_2\DCBBL1_3_2_2023\H15_MER_set1'
+       r'\\192.168.0.3\bbfishdc10_2\DCBBL1_3_2_2023\H16_MER_set1']
     set_,ifov = set_ifov
     all_flds = [fld.replace('_set1',set_) for fld in all_flds]
-    fls = glob.glob(all_flds[0]+os.sep+'*.zarr')
-    fovs = [os.path.basename(fl) for fl in fls]
+    fovs_fl = save_folder+os.sep+'fovs__'+set_+'.npy'
+    if not os.path.exists(fovs_fl):
+        fls = glob.glob(all_flds[0]+os.sep+'*.zarr')
+        fovs = [os.path.basename(fl) for fl in fls]
+        np.save(fovs_fl,fovs)
+    else:
+        fovs = np.load(fovs_fl)
     if ifov<len(fovs):
         fov = fovs[ifov]
         print("Computing fitting on: "+str(fov))
         compute_fits(save_folder,fov,all_flds,redo=False)
         print("Computing drift on: "+str(fov))
-        compute_drift(save_folder,fov,all_flds,set_,redo=False)
+        compute_drift(save_folder,fov,all_flds,set_,redo=True)
     return set_ifov
 if __name__ == '__main__':
     # start 4 worker processes
@@ -65,7 +72,7 @@ if __name__ == '__main__':
                         
     #main_f(['_set1',50000])
     if True:
-        with Pool(processes=25) as pool:
+        with Pool(processes=35) as pool:
             print('starting pool')
             result = pool.map(main_f, items)
             if False:
