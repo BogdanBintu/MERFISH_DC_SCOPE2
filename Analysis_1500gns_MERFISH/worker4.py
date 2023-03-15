@@ -65,6 +65,15 @@ def compute_fits(save_folder,fov,all_flds,redo=False,ncols=4):
                 Xh = get_local_max(im_n,500,im_raw=im__,dic_psf=None,delta=1,delta_fit=3,dbscan=True,
                       return_centers=False,mins=None,sigmaZ=1,sigmaXY=1.5)
                 np.savez_compressed(save_fl,Xh=Xh)
+def compute_decoding(save_folder,fov,set_):
+    dec = decoder_simple(save_folder,fov,set_)
+    complete = dec.check_is_complete()
+    if complete==0:
+        dec.get_XH(fov,set_,ncols=3)#number of colors match 
+        dec.XH = dec.XH[dec.XH[:,-4]>0.25] ### keep the spots that are correlated with the expected PSF for 60X
+        dec.load_library(lib_fl = r'Z:\DCBBL1_3_2_2023\MERFISH_Analysis\codebook_0_New_DCBB-300_MERFISH_encoding_2_21_2023.csv',nblanks=-1)
+        dec.get_inters(dinstance_th=2,enforce_color=True)# enforce_color=False
+        dec.get_icodes(nmin_bits=4,method = 'top4')
 def main_f(set_ifov):
     save_folder =r'Y:\DCBBL1_3_2_2023\MERFISH_Analysis'
     if not os.path.exists(save_folder): os.makedirs(save_folder)
@@ -102,6 +111,9 @@ def main_f(set_ifov):
         compute_fits(save_folder,fov,all_flds,redo=False)
         print("Computing drift on: "+str(fov))
         compute_drift(save_folder,fov,all_flds,set_,redo=False)
+        
+        compute_decoding()
+        
     return set_ifov
 if __name__ == '__main__':
     # start 4 worker processes

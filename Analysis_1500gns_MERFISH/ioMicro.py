@@ -1651,3 +1651,260 @@ class decoder():
         Xh = Xh[good]
         from scipy import ndimage
         self.aso_mean = ndimage.mean(Xh[:,5],labels=labels,index=self.icells)
+        
+def get_iH(fld): return int(os.path.basename(fld).split('_')[0][1:])
+class decoder_simple():
+    def __init__(self,save_folder,fov='Conv_zscan__001',set_='_set1'):
+        self.save_folder = save_folder
+        self.fov,self.set_ = fov,set_
+        save_folder = self.save_folder
+        self.decoded_fl = save_folder+os.sep+'decoded_'+fov.split('.')[0]+'--'+set_+'.npz'
+        self.drift_fl = save_folder+os.sep+'drift_'+fov.split('.')[0]+'--'+set_+'.pkl'
+    def check_is_complete(self):
+        if os.path.exists(self.decoded_fl):
+            print("Completed")
+            return 1
+        if not os.path.exists(self.drift_fl):
+            print("Did not detect fit files")
+            return -1
+        print("Not completed")
+        return 0
+        
+    def get_fovs_sets(self):
+        self.drift_fls = glob.glob(self.save_folder+os.sep+'drift_*.pkl')
+        self.fov_sets = [os.path.basename(fl).replace('drift_','').replace('.pkl','').split('--')
+                         for fl in self.drift_fls]
+    def get_XH(self,fov,set_,ncols=3):
+        self.set_ = set_
+        save_folder = self.save_folder
+        drift_fl = save_folder+os.sep+'drift_'+fov.split('.')[0]+'--'+set_+'.pkl'
+        drifts,all_flds,fov = pickle.load(open(drift_fl,'rb'))
+        self.drifts,self.all_flds,self.fov = drifts,all_flds,fov
+
+        XH = []
+        for iH in tqdm(np.arange(len(all_flds))):
+            fld = all_flds[iH]
+            if 'MER' in os.path.basename(fld):
+                for icol in range(ncols):
+                    tag = os.path.basename(fld)
+                    save_fl = save_folder+os.sep+fov.split('.')[0]+'--'+tag+'--col'+str(icol)+'__Xhfits.npy.npz'
+                    if not os.path.exists(save_fl):save_fl = save_fl.replace('.npy','')
+                    Xh = np.load(save_fl)['Xh']
+                    tzxy = drifts[iH][0]
+                    Xh[:,:3]+=tzxy# drift correction
+                    ih = get_iH(fld) # get bit
+                    bit = (ih-1)*3+icol
+                    icolR = np.array([[icol,bit]]*len(Xh))
+                    XH_ = np.concatenate([Xh,icolR],axis=-1)
+                    XH.extend(XH_)
+        self.XH = np.array(XH)
+    def get_inters(self,dinstance_th=2,enforce_color=False):
+        """Get an initial intersection of points and save in self.res"""
+        res =[]
+        if enforce_color:
+            icols = self.XH[:,-2]
+            XH = self.XH
+            for icol in tqdm(np.unique(icols)):
+                inds = np.where(icols==icol)[0]
+                Xs = XH[inds,:3]
+                Ts = cKDTree(Xs)
+                res_ = Ts.query_ball_tree(Ts,dinstance_th)
+                res += [inds[r] for r in res_]
+        else:
+            XH = self.XH
+            Xs = XH[:,:3]
+            Ts = cKDTree(Xs)
+            res = Ts.query_ball_tree(Ts,dinstance_th)
+        self.res = res
+        
+    def load_library(self,lib_fl = r'Z:\DCBBL1_3_2_2023\MERFISH_Analysis\codebook_0_New_DCBB-300_MERFISH_encoding_2_21_2023.csv',nblanks=-1):
+        code_txt = np.array([ln.replace('\n','').split(',') for ln in open(lib_fl,'r') if ',' in ln])
+        gns = code_txt[1:,0]
+        code_01 = code_txt[1:,2:].astype(int)
+        codes = np.array([np.where(cd)[0] for cd in code_01])
+        codes_ = [list(np.sort(cd)) for cd in codes]
+        nbits = np.max(codes)+1
+
+        codes__ = codes_
+        gns__ = list(gns)
+        if nblanks>=0:
+            ### get extrablanks
+            from itertools import combinations
+            X_codes = np.array((list(combinations(range(nbits),4))))
+            X_code_01 = []
+            for cd in X_codes:
+                l_ = np.zeros(nbits)
+                l_[cd] = 1
+                X_code_01.append(l_)
+            X_code_01 = np.array(X_code_01,dtype=int)
+            from scipy.spatial.distance import cdist
+            eblanks = np.where(np.min(cdist(code_01,X_code_01,metric='hamming'),0)>=4/float(nbits))[0]
+            codes__ = codes_ + [list(e)for e in X_codes[eblanks]]
+            gns__ = list(gns)+ ['blanke'+str(ign+1).zfill(4) for ign in range(len(eblanks))]
+        
+        bad_gns = np.array(['blank' in e for e in gns__])
+        good_gns = np.where(~bad_gns)[0]
+        bad_gns = np.where(bad_gns)[0]
+
+        
+        
+        self.lib_fl = lib_fl ### name of coding library
+        self.nbits = nbits ### number of bits
+        self.gns_names = gns__  ### names of genes and blank codes
+        self.bad_gns = bad_gns ### indices of the blank codes
+        self.good_gns = good_gns ### indices of the good gene codes
+        self.codes__ = codes__ ### final extended codes of form [bit1,bit2,bit3,bit4]
+        self.codes_01 = code_01
+        if nblanks>=0:
+            self.codes_01 = np.concatenate([code_01,X_code_01[eblanks]],axis=0) ### final extended codes of form [0,1,0,0,1...]
+        
+        dic_bit_to_code = {}
+        for icd,cd in enumerate(self.codes__): 
+            for bit in cd:
+                if bit not in dic_bit_to_code: dic_bit_to_code[bit]=[]
+                dic_bit_to_code[bit].append(icd)
+        self.dic_bit_to_code = dic_bit_to_code  ### a dictinary in which each bit is mapped to the inde of a code
+    def get_icodes(self,nmin_bits=4,method = 'top4',redo=False):    
+        #### unfold res which is a list of list with clusters of loc.
+        
+        
+        res = self.res
+
+        import time
+        start = time.time()
+        res = [r for r in res if len(r)>=nmin_bits]
+        #rlens = [len(r) for r in res]
+        #edges = np.cumsum([0]+rlens)
+        res_unfolder = np.array([r_ for r in res for r_ in r])
+        #res0 = np.array([r[0] for r in res for r_ in r])
+        ires = np.array([ir for ir,r in enumerate(res) for r_ in r])
+        print("Unfolded molecules:",time.time()-start)
+
+        ### get scores across bits
+        import time
+        start = time.time()
+        RS = self.XH[:,-1].astype(int)
+        brighness = self.XH[:,-3]
+        colors = self.XH[:,-2]#self.XH[:,-1] for bits
+        med_cols = {col: np.median(brighness[col==colors])for col in np.unique(colors)}
+        brighness_n = brighness.copy()
+        for col in np.unique(colors):
+            brighness_n[col==colors]=brighness[col==colors]/med_cols[col]
+        scores = brighness_n[res_unfolder]
+       
+        bits_unfold = RS[res_unfolder]
+        nbits = len(np.unique(RS))
+        scores_bits = np.zeros([len(res),nbits])
+        arg_scores = np.argsort(scores)
+        scores_bits[ires[arg_scores],bits_unfold[arg_scores]]=scores[arg_scores]
+
+        import time
+        start = time.time()
+        ### There are multiple avenues here: 
+        #### nearest neighbors - slowest
+        #### best dot product - reasonable and can return missing elements - medium speed
+        #### find top 4 bits and call that a code - simplest and fastest
+
+
+        if method == 'top4':
+            codes = self.codes__
+            vals = np.argsort(scores_bits,axis=-1)
+            bcodes = np.sort(vals[:,-4:],axis=-1)
+            base = [nbits**3,nbits**2,nbits**1,nbits**0]
+            bcodes_b = np.sum(bcodes*base,axis=1)
+            codes_b = np.sum(np.sort(codes,axis=-1)*base,axis=1)
+            icodesN = np.zeros(len(bcodes_b),dtype=int)-1
+            for icd,cd in enumerate(codes_b):
+                icodesN[bcodes_b==cd]=icd
+            bad = np.sum(scores_bits>0,axis=-1)<4
+            icodesN[bad]=-1
+            igood = np.where(icodesN>-1)[0]
+            inds_spotsN =  np.zeros([len(res),nbits],dtype=int)-1
+            inds_spotsN[ires[arg_scores],bits_unfold[arg_scores]]=res_unfolder[arg_scores]
+            res_prunedN = np.array([inds_spotsN[imol][codes[icd]] for imol,icd in enumerate(icodesN) if icd>-1])
+            scores_prunedN = np.array([scores_bits[imol][codes[icd]] for imol,icd in enumerate(icodesN) if icd>-1])
+            icodesN = icodesN[igood]
+        elif method == 'dot':
+            icodesN = np.argmax(np.dot(scores_bits[:],self.codes_01.T),axis=-1)
+            inds_spotsN =  np.zeros([len(res),nbits],dtype=int)-1
+            inds_spotsN[ires[arg_scores],bits_unfold[arg_scores]]=res_unfolder[arg_scores]
+            res_prunedN = np.array([inds_spotsN[imol][codes[icd]] for imol,icd in enumerate(icodesN) if icd>-1])
+            scores_prunedN = np.array([scores_bits[imol][codes[icd]] for imol,icd in enumerate(icodesN) if icd>-1])
+
+        print("Computed the decoding:",time.time()-start)
+
+        import time
+        start = time.time()
+
+        mean_scores = np.mean(scores_prunedN,axis=-1)
+        ordered_mols = np.argsort(mean_scores)[::-1]
+        keep_mols = []
+        visited = np.zeros(len(self.XH))
+        for imol in tqdm(ordered_mols):
+            r = np.array(res_prunedN[imol])
+            r_ = r[r>=0]
+            if np.all(visited[r_]==0):
+                keep_mols.append(imol)
+                visited[r_]=1
+        keep_mols = np.array(keep_mols)
+        self.scores_prunedN = scores_prunedN[keep_mols]
+        self.res_prunedN = res_prunedN[keep_mols]
+        self.icodesN = icodesN[keep_mols]
+        print("Computed best unique assigment:",time.time()-start)
+        
+        XH_pruned = self.XH[self.res_prunedN]
+        np.savez_compressed(self.decoded_fl,XH_pruned=XH_pruned,icodesN=dec.icodesN,gns_names = np.array(self.gns_names))
+        #XH_pruned -> 10000000 X 4 X 10 [z,x,y,bk...,corpsf,h,col,bit] 
+        #icodesN -> 10000000 index of the decoded molecules in gns_names
+        #gns_names
+    def load_decoded(self):
+        import time
+        start= time.time()
+        self.XH_pruned = np.load(self.decoded_fl)['XH_pruned']
+        self.icodesN = np.load(self.decoded_fl)['icodesN']
+        self.gns_names = np.load(self.decoded_fl)['gns_names']
+        print("Loaded decoded:",start-time.time())
+    def get_is_bright(self,th_dic = {0:1500,1:1500,2:750},get_stats=True):
+        self.th_dic = th_dic
+        gns_names,icodesN,XH_pruned = self.gns_names,self.icodesN,self.XH_pruned
+        th_arr = np.array([th_dic[e]for e in np.sort(list(th_dic.keys()))])
+        good_codes = np.where(~np.array(['blank' in gn_nm for gn_nm in gns_names]))[0]
+        is_blank = ~np.in1d(icodesN,good_codes)
+        Rs = XH_pruned[:,:,-2].astype(int)
+        scores_prunedN = XH_pruned[:,:,-3]
+        is_bright= np.all(dec.scores_prunedN>th_arr[Rs],axis=-1)
+        self.is_bright = is_bright
+        fr_blank = np.sum(is_bright[is_blank])/np.sum(is_bright)
+        if get_stats:
+            print("Fraction error:",fr_blank)
+            icodesN_ = icodesN[is_bright]
+            icds,ncts = np.unique(icodesN_,return_counts=True)
+            keep_good = np.in1d(icds,good_codes)
+
+            plt.figure()
+            plt.plot(ncts,'-')
+            plt.plot(ncts[~keep_good],'-')
+
+    def plot_points(self,genes=['Olig2','Gfap'],cols=['r','g'],viewer = None):
+        icodesN,XH_pruned = self.icodesN,self.XH_pruned
+        is_bright = self.is_bright
+        gns_names = list(self.gns_names)
+        icodesf = icodesN[is_bright]
+        Xcms = np.mean(XH_pruned[is_bright],axis=1)
+        H = Xcms[:,-3]
+        X = Xcms[:,:3]
+        size = 1+np.clip(H/np.percentile(H,95),0,1)*20
+
+        if viewer is None:
+            import napari
+            viewer = napari.Viewer()
+        for ign in range(len(genes)):
+            if cols is not None:
+                color = cols[ign%len(cols)]
+            else:
+                color='white'
+            gene = genes[ign]
+            icode = gns_names.index(gene)
+            is_code = icode==icodesf
+            viewer.add_points(X[is_code],size=size[is_code],face_color=color,name=gene)
+        return viewer
