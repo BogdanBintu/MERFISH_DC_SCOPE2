@@ -1,12 +1,11 @@
 
-#cd "C:\Users\BintuLab\Scope4AnalysisScripts\MERFISH_Spot_Analysis\Analysis_1500gns_MERFISH"&&activate cellpose&&python worker3.py
+#cd "C:\Users\BintuLabUser\Scope3AnalysisScripts\MERFISH_spot_analysis\Analysis_1500gns_MERFISH"&&activate cellpose&&python worker4.py
 
 from multiprocessing import Pool, TimeoutError
 import time,sys
 import os,sys,numpy as np
 
-#sys.path.append(r'C:\Users\BintuLab\Dropbox\MERFISH_DC_SCOPE3')
-master_analysis_folder = r'C:\Users\BintuLab\Scope4AnalysisScripts\MERFISH_Spot_Analysis\Analysis_1500gns_MERFISH'
+master_analysis_folder = r'C:\Users\BintuLabUser\Scope3AnalysisScripts\MERFISH_spot_analysis\Analysis_1500gns_MERFISH'
 sys.path.append(master_analysis_folder)
 from ioMicro import *
 
@@ -71,30 +70,15 @@ def compute_decoding(save_folder,fov,set_):
     if complete==0:
         dec.get_XH(fov,set_,ncols=3)#number of colors match 
         dec.XH = dec.XH[dec.XH[:,-4]>0.25] ### keep the spots that are correlated with the expected PSF for 60X
-        dec.load_library(lib_fl = r'Z:\DCBBL1_3_2_2023\MERFISH_Analysis\codebook_0_New_DCBB-300_MERFISH_encoding_2_21_2023.csv',nblanks=-1)
+        dec.load_library(lib_fl = r'\\192.168.0.10\bbfishdc13\codebook_0_New_DCBB-300_MERFISH_encoding_2_21_2023.csv',nblanks=-1)
         dec.get_inters(dinstance_th=2,enforce_color=True)# enforce_color=False
-        dec.get_icodes(nmin_bits=4,method = 'top4')
+        dec.get_icodes(nmin_bits=4,method = 'top4',norm_brightness=-1)
 def main_f(set_ifov):
-    save_folder =r'Y:\DCBBL1_3_2_2023\MERFISH_Analysis'
+    save_folder =r'\\192.168.0.10\bbfishdc13\DCBBL1_3_10_2023__GFP\MERFISH_Analysis'
     if not os.path.exists(save_folder): os.makedirs(save_folder)
-    all_flds = [r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\Controls\H0_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\Controls\H1_Igfbp_Aldh1l1_Ptbp1_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H1_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H2_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H3_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H4_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H5_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H6_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H7_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H8_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H9_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H10_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H11_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H12_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H13_MER_set1',
-       r'\\192.168.0.3\bbfishdc10\DCBBL1_3_2_2023\MERFISH\H14_MER_set1',
-       r'\\192.168.0.3\bbfishdc10_2\DCBBL1_3_2_2023\H15_MER_set1',
-       r'\\192.168.0.3\bbfishdc10_2\DCBBL1_3_2_2023\H16_MER_set1']
+    all_flds = glob.glob(r'\\192.168.0.10\bbfishdc13\DCBBL1_3_10_2023__GFP\P*_set1')
+    all_flds += glob.glob(r'\\192.168.0.10\bbfishdc13\DCBBL1_3_10_2023__GFP\H*_set1')
+    
     set_,ifov = set_ifov
     all_flds = [fld.replace('_set1',set_) for fld in all_flds]
     fovs_fl = save_folder+os.sep+'fovs__'+set_+'.npy'
@@ -106,23 +90,25 @@ def main_f(set_ifov):
         fovs = np.load(fovs_fl)
     if ifov<len(fovs):
         fov = fovs[ifov]
-        print("Computing fitting on: "+str(fov))
-        print(len(all_flds),all_flds)
-        compute_fits(save_folder,fov,all_flds,redo=False)
-        print("Computing drift on: "+str(fov))
-        compute_drift(save_folder,fov,all_flds,set_,redo=False)
-        
-        compute_decoding()
-        
+        try:
+            print("Computing fitting on: "+str(fov))
+            print(len(all_flds),all_flds)
+            compute_fits(save_folder,fov,all_flds,redo=False)
+            print("Computing drift on: "+str(fov))
+            compute_drift(save_folder,fov,all_flds,set_,redo=False)
+            
+            compute_decoding(save_folder,fov,set_)
+        except:
+            print("Failed:",fov,set_)
     return set_ifov
 if __name__ == '__main__':
     # start 4 worker processes
-    items = [(set_,ifov)for set_ in ['_set1','_set2','_set3','_set4']
+    items = [(set_,ifov)for set_ in ['_set1','_set2']
                         for ifov in range(1000)]
                         
-    #main_f(['_set1',3])
+    #main_f(['_set2',47])
     if True:
-        with Pool(processes=35) as pool:
+        with Pool(processes=15) as pool:
             print('starting pool')
             result = pool.map(main_f, items)
 

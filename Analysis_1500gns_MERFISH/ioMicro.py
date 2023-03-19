@@ -1764,7 +1764,7 @@ class decoder_simple():
                 if bit not in dic_bit_to_code: dic_bit_to_code[bit]=[]
                 dic_bit_to_code[bit].append(icd)
         self.dic_bit_to_code = dic_bit_to_code  ### a dictinary in which each bit is mapped to the inde of a code
-    def get_icodes(self,nmin_bits=4,method = 'top4',redo=False):    
+    def get_icodes(self,nmin_bits=4,method = 'top4',redo=False,norm_brightness=None):    
         #### unfold res which is a list of list with clusters of loc.
         
         
@@ -1785,11 +1785,12 @@ class decoder_simple():
         start = time.time()
         RS = self.XH[:,-1].astype(int)
         brighness = self.XH[:,-3]
-        colors = self.XH[:,-2]#self.XH[:,-1] for bits
-        med_cols = {col: np.median(brighness[col==colors])for col in np.unique(colors)}
         brighness_n = brighness.copy()
-        for col in np.unique(colors):
-            brighness_n[col==colors]=brighness[col==colors]/med_cols[col]
+        if norm_brightness is not None:
+            colors = self.XH[:,norm_brightness]#self.XH[:,-1] for bits
+            med_cols = {col: np.median(brighness[col==colors])for col in np.unique(colors)}
+            for col in np.unique(colors):
+                brighness_n[col==colors]=brighness[col==colors]/med_cols[col]
         scores = brighness_n[res_unfolder]
        
         bits_unfold = RS[res_unfolder]
@@ -1853,7 +1854,7 @@ class decoder_simple():
         print("Computed best unique assigment:",time.time()-start)
         
         XH_pruned = self.XH[self.res_prunedN]
-        np.savez_compressed(self.decoded_fl,XH_pruned=XH_pruned,icodesN=dec.icodesN,gns_names = np.array(self.gns_names))
+        np.savez_compressed(self.decoded_fl,XH_pruned=XH_pruned,icodesN=self.icodesN,gns_names = np.array(self.gns_names))
         #XH_pruned -> 10000000 X 4 X 10 [z,x,y,bk...,corpsf,h,col,bit] 
         #icodesN -> 10000000 index of the decoded molecules in gns_names
         #gns_names
@@ -1872,7 +1873,7 @@ class decoder_simple():
         is_blank = ~np.in1d(icodesN,good_codes)
         Rs = XH_pruned[:,:,-2].astype(int)
         scores_prunedN = XH_pruned[:,:,-3]
-        is_bright= np.all(dec.scores_prunedN>th_arr[Rs],axis=-1)
+        is_bright= np.all(scores_prunedN>th_arr[Rs],axis=-1)
         self.is_bright = is_bright
         fr_blank = np.sum(is_bright[is_blank])/np.sum(is_bright)
         if get_stats:
@@ -1884,7 +1885,36 @@ class decoder_simple():
             plt.figure()
             plt.plot(ncts,'-')
             plt.plot(ncts[~keep_good],'-')
+    def get_XH_tag(self,tag='GFP',ncols=3):
+        """This looks through all the fitted files (stored in the drift_fl)
+        and will load self.Xh the drift corrected fits from file containing <tag>"""
+        set_,fov = self.set_,self.fov
+        save_folder = self.save_folder
+        drift_fl = save_folder+os.sep+'drift_'+fov.split('.')[0]+'--'+set_+'.pkl'
+        drifts,all_flds,fov = pickle.load(open(drift_fl,'rb'))
+        self.drifts,self.all_flds,self.fov = drifts,all_flds,fov
 
+        XH = []
+        
+        for iH in tqdm(np.arange(len(all_flds))):
+            fld = all_flds[iH]
+            if tag in os.path.basename(fld):
+                for icol in range(ncols):
+                    tag = os.path.basename(fld)
+                    save_fl = save_folder+os.sep+fov.split('.')[0]+'--'+tag+'--col'+str(icol)+'__Xhfits.npy.npz'
+                    if not os.path.exists(save_fl):save_fl = save_fl.replace('.npy','')
+                    Xh = np.load(save_fl)['Xh']
+                    tzxy = drifts[iH][0]
+                    Xh[:,:3]+=tzxy# drift correction
+                    #ih = get_iH(fld) # get bit
+                    bit = -1#(ih-1)*3+icol
+                    if len(Xh):
+                        icolR = np.array([[icol,bit]]*len(Xh))
+                        print(icolR.shape,Xh.shape)
+                        XH_ = np.concatenate([Xh,icolR],axis=-1)
+                        XH.extend(XH_)
+        self.Xh = np.array(XH)
+            
     def plot_points(self,genes=['Olig2','Gfap'],cols=['r','g'],viewer = None):
         icodesN,XH_pruned = self.icodesN,self.XH_pruned
         is_bright = self.is_bright
