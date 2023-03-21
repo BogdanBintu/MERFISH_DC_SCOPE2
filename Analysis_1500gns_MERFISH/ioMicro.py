@@ -220,49 +220,105 @@ def converge(cells1,cells2):
 def final_segmentation(fl_dapi,
                         analysis_folder=r'X:\DCBB_human__11_18_2022_Analysis',
                         plt_val=True,
-                        rescz = 4,trimz=2, resc=4,p99=None):
+                        rescz = 4,trimz=0, resc=4,p99=2000,force=False):
     segm_folder = analysis_folder+os.sep+'Segmentation'
     if not os.path.exists(segm_folder): os.makedirs(segm_folder)
     
     save_fl  = segm_folder+os.sep+os.path.basename(fl_dapi).split('.')[0]+'--'+os.path.basename(os.path.dirname(fl_dapi))+'--dapi_segm.npz'
     
-    if not os.path.exists(save_fl):
+    if not os.path.exists(save_fl) or force:
         im = read_im(fl_dapi)
         #im_mid_dapi = np.array(im[-1][im.shape[1]//2],dtype=np.float32)
-        im_dapi = im[-1,::rescz][trimz:-trimz]
+        im_dapi = im[-1,::rescz]
+        if trimz!=0:
+            im_dapi = im_dapi[trimz:-trimz]
         
-        im_seg_2 = standard_segmentation(im_dapi,resc=resc,sz_min_2d=100,sz_cell=20,use_gpu=True,model='cyto2',p99=p99)
+        im_seg_2,im_seg_1 = standard_segmentation(im_dapi,resc=resc,sz_min_2d=400,sz_cell=22,use_gpu=True,model='cyto',p99=p99)
         shape = np.array(im[-1].shape)
-        np.savez_compressed(save_fl,segm = im_seg_2,shape = shape)
+        np.savez_compressed(save_fl,segm = im_seg_2,shape = shape,segm_2d=im_seg_1)
 
         
 
     if plt_val:
         fl_png = save_fl.replace('.npz','__segim.png')
-        if not os.path.exists(fl_png):
-            im = read_im(fl_dapi)
-            im_seg_2 = np.load(save_fl)['segm']
-            shape =  np.load(save_fl)['shape']
-            
-            im_dapi_sm = resize(im[-1],im_seg_2.shape)
-            img = np.array(im_dapi_sm[im_dapi_sm.shape[0]//2],dtype=np.float32)
-            masks_ = im_seg_2[im_seg_2.shape[0]//2]
-            from cellpose import utils
-            outlines = utils.masks_to_outlines(masks_)
-            p1,p99 = np.percentile(img,1),np.percentile(img,99.9)
-            img = np.array(np.clip((img-p1)/(p99-p1),0,1),dtype=np.float32)
-            outX, outY = np.nonzero(outlines)
-            imgout= np.dstack([img]*3)
-            imgout[outX, outY] = np.array([1,0,0]) # pure red
-            fig = plt.figure(figsize=(20,20))
-            plt.imshow(imgout)
-            
-            fig.savefig(fl_png)
-            plt.close('all')
-            print("Saved file:"+fl_png)
-def standard_segmentation(im_dapi,resc=2,sz_min_2d=400,sz_cell=25,use_gpu=True,model='cyto2',p99=None):
+        #if not os.path.exists(fl_png):
+        im = read_im(fl_dapi)
+        im_seg_2 = np.load(save_fl)['segm']
+        shape =  np.load(save_fl)['shape']
+        
+        im_dapi_sm = resize(im[-1],im_seg_2.shape)
+        img = np.array(im_dapi_sm[im_dapi_sm.shape[0]//2],dtype=np.float32)
+        masks_ = im_seg_2[im_seg_2.shape[0]//2]
+        from cellpose import utils
+        outlines = utils.masks_to_outlines(masks_)
+        p1,p99 = np.percentile(img,1),np.percentile(img,99.9)
+        img = np.array(np.clip((img-p1)/(p99-p1),0,1),dtype=np.float32)
+        outX, outY = np.nonzero(outlines)
+        imgout= np.dstack([img]*3)
+        imgout[outX, outY] = np.array([1,0,0]) # pure red
+        fig = plt.figure(figsize=(20,20))
+        plt.imshow(imgout)
+        
+        fig.savefig(fl_png)
+        plt.close('all')
+        print("Saved file:"+fl_png)
+        
+def get_counts_per_cell(self,th_cor=0.5):
+    dic_th = self.dic_th
+    icol = self.icol
+    im_segm = self.im_segm
+    shapesm = self.im_segm.shape
+    shape = self.shape
+
+    Xh = self.Xh.copy()
+    cor = Xh[:,-2]
+    h = Xh[:,-1]
+    keep = h>dic_th.get(icol,0)
+    Xh = Xh[keep]
+    txyz = np.array(self.dic_drift['txyz'])
+    txyz[txyz>0]=0
+    Xcms = Xh[:,:3]-txyz
+    Xred = np.round((Xcms/shape)*shapesm).astype(int)
+    good = ~np.any((Xred>=shapesm)|(Xred<0),axis=-1)
+    Xh,Xred = Xh[good],Xred[good]
+    self.Xred = Xred
+    icells = im_segm[tuple(Xred.T)]
+    cells,cts = np.unique(icells[(Xh[:,-2]>th_cor)],return_counts=True)
+    self.good_counts = {c_+self.ifov*10**6:ct_ for c_,ct_ in zip(cells,cts) if c_>0}
+    cells,cts = np.unique(icells[(Xh[:,-2]<th_cor)],return_counts=True)
+    self.bad_counts = {c_+self.ifov*10**6:ct_ for c_,ct_ in zip(cells,cts) if c_>0}
+def get_int_im1_im2(im1,im2,th_int=0.5):
+    inters = ((im1>0)&(im2>0)).astype(int)
+    im1_in2 = im1*inters
+    N1max = np.max(im1)+1
+    im2_in1 = im2*inters*N1max
+    iint,cts = np.unique(im1_in2+im2_in1,return_counts=True)
+    c1,cts1 = np.unique(im1,return_counts=True)
+    dic_c1 = {c_:ct_ for c_,ct_ in zip(c1,cts1) if c_>0}
+    c2,cts2 = np.unique(im2,return_counts=True)
+    dic_c2 = {c_:ct_ for c_,ct_ in zip(c2,cts2) if c_>0}
+    dic_int= {(c1,c2):(ct/dic_c1[c1],ct/dic_c2[c2]) for c2,c1,ct in zip(iint//N1max,iint%N1max,cts) 
+         if (c1>0) and (c2>0) and (c1!=c2)}
+    objs1 = nd.find_objects(im1)
+    objs2 = nd.find_objects(im2)
+    for cch in dic_int:
+        c1,c2 = cch
+        ic1,ic2 = dic_int[cch]
+        obj1,obj2 = objs1[c1-1],objs2[c2-1]
+        if (ic1>th_int) or (ic2>th_int):
+            c_ = np.min([c1,c2])
+            im1[obj1][im1[obj1]==c1]=c_
+            im2[obj2][im2[obj2]==c2]=c_
+    return im1,im2
+def stitch3D(im_segm,niter=5,th_int=0.5):
+    for it_ in range(niter):
+        for iim in range(len(im_segm)-1):
+            im_segm[iim],im_segm[iim+1] = get_int_im1_im2(im_segm[iim],im_segm[iim+1],th_int=th_int)
+    return im_segm
+def standard_segmentation(im_dapi,resc=4,sz_min_2d=400,sz_cell=22,use_gpu=True,model='cyto',p99=2000):
     """Using cellpose with nuclei mode"""
     from cellpose import models, io,utils
+    from scipy import ndimage
     model = models.Cellpose(gpu=use_gpu, model_type=model)
     #decided that resampling to the 4-2-2 will make it faster
     #im_dapi_3d = im_dapi[::rescz,::resc,::resc].astype(np.float32)
@@ -272,14 +328,23 @@ def standard_segmentation(im_dapi,resc=2,sz_min_2d=400,sz_cell=25,use_gpu=True,m
     from tqdm import tqdm
     for im in tqdm(im_dapi):
         im_ = np.array(im,dtype=np.float32)
-        img = (cv2.blur(im_,(2,2))-cv2.blur(im_,(50,50)))[::resc,::resc]
+        img = (cv2.blur(im_,(2,2))-cv2.blur(im_,(150,150)))[::resc,::resc]
         p1 = np.percentile(img,1)
         if p99 is None:
             p99 = np.percentile(img,99.9)
         img = np.array(np.clip((img-p1)/(p99-p1),0,1),dtype=np.float32)
         masks, flows, styles, diams = model.eval(img, diameter=sz_cell, channels=chan,
-                                             flow_threshold=10,cellprob_threshold=-20,min_size=50,normalize=False)
-        masks_all.append(utils.fill_holes_and_remove_small_masks(masks,min_size=sz_min_2d))#,hole_size=3
+                                             flow_threshold=0.85,cellprob_threshold=-2,min_size=sz_min_2d,normalize=False)
+        
+        
+        umsks = np.unique(masks)
+        means = ndimage.mean(im_[::resc,::resc],masks,index=umsks)
+        th = (np.percentile(means[1:],25)+means[0])/2
+        bad = np.in1d(masks,umsks[means<th])
+        #masks_ = masks.copy()
+        masks[bad.reshape(masks.shape)]=0
+        
+        masks_all.append(masks)#,hole_size=3
         flows_all.append(flows[0])
     masks_all = np.array(masks_all)
 
@@ -304,7 +369,8 @@ def standard_segmentation(im_dapi,resc=2,sz_min_2d=400,sz_cell=25,use_gpu=True,m
         cells1,cells2 = masks_all_cpf[index],masks_all_cpf[index+1]
         cells1_,cells2_ = converge(cells1,cells2)
         masks_all_cpf[index+1]=cells2_
-    return masks_all_cpf
+    #masks_all_cpf_ = stitch3D(masks_all_cpf,niter=5,th_int=0.75)
+    return masks_all_cpf,masks_all
 
 def get_dif_or_ratio(im_sig__,im_bk__,sx=20,sy=20,pad=5,col_align=-2):
     size_ = im_sig__.shape
