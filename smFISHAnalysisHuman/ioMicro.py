@@ -227,13 +227,13 @@ def load_segm(self):
 def final_segmentation(fl_dapi,
                         analysis_folder=r'X:\DCBB_human__11_18_2022_Analysis',
                         plt_val=True,subtr_bk=0,
-                        rescz = 4,trimz=2, resc=4,p99=None,use_3d_cellpose=False):
+                        rescz = 4,trimz=2, resc=4,p99=None,use_3d_cellpose=False,force=False):
     segm_folder = analysis_folder+os.sep+'Segmentation'
     if not os.path.exists(segm_folder): os.makedirs(segm_folder)
     
     save_fl  = segm_folder+os.sep+os.path.basename(fl_dapi).split('.')[0]+'--'+os.path.basename(os.path.dirname(fl_dapi))+'--dapi_segm.npz'
     
-    if not os.path.exists(save_fl):
+    if not os.path.exists(save_fl) or force:
         im = read_im(fl_dapi)
         #im_mid_dapi = np.array(im[-1][im.shape[1]//2],dtype=np.float32)
         im_dapi = im[-1,::rescz][trimz:-trimz]
@@ -588,11 +588,11 @@ def concat(ims):
     
     return concatenate(ims_)
 class analysis_smFISH():
-    def __init__(self,data_folders = [r'X:\DCBB_human__11_18_2022'],
+    def __init__(self,data_folders = [r'X:\DCBB_human__11_18_2022\H*'],
                  save_folder = r'X:\DCBB_human__11_18_2022_Analysis',
                  H0folder=  r'X:\DCBB_human__11_18_2022\H0*',exclude_H0=True):
         self.Qfolders = [fld for data_folder in data_folders 
-                             for fld in glob.glob(data_folder+os.sep+'H*')]
+                             for fld in glob.glob(data_folder) if os.path.isdir(fld)]
 
         self.H0folders = glob.glob(H0folder)
         self.save_folder = save_folder
@@ -1216,7 +1216,9 @@ def get_pos(path):
         tag = '<stage_position type="custom">'
         x,y = eval(txt.split(tag)[-1].split('</')[0])
     return x,y
+def get_fov(fl): return os.path.basename(fl).split('--')[0].split('.')[0]
 def get_ifov(fl):return int(os.path.basename(fl).split('--')[0].split('_')[-1].split('.')[0])
+def get_H_fld(fl):return os.path.basename(fl).split('--')[1]
 def get_H(fl):return int(os.path.basename(fl).split('--')[1].split('_')[0].split('T')[0].split('R')[0].split('Q')[0][1:])
 def get_iH_npy(fl): return int(os.path.basename(fl).split('--iR')[-1].split('.')[0])
 def get_Xwarp(x_ch,X,T,nneigh=50,sgaus=100):
