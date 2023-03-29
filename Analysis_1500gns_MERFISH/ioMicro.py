@@ -2128,11 +2128,12 @@ def plot_1gene(self,gene='Gad1',viewer = None):
     is_code = icode==icodesf
     viewer.add_points(X[is_code],size=size[is_code],face_color='r',name=gene)
 
-    is_gn = dec.icodesN==(list(dec.gns_names).index(gene))
+    is_gn = self.icodesN==(list(self.gns_names).index(gene))
     keep_gn = scoreA[is_gn]>th
-    Xcms = np.mean(dec.XH_pruned,axis=1)
+    Xcms = np.mean(self.XH_pruned,axis=1)
     viewer.add_points(Xcms[is_gn][keep_gn][:,:3],size=10,face_color='g',name=gene)
     return viewer
+
 def plot_points_direct(Xh,gene='gene',color='g',minsz=0,maxsz=20,percentage_max = 95,viewer=None):
     H = Xh[:,-3]
     X = Xh[:,:3]
@@ -2206,3 +2207,86 @@ def get_signal_ab(dec,fld_dapi = r'Y:\DCBBL1_3_15_2023__GFP\H9_MER',
     ab_sigs2 = nd.sum(dec.im_abn_sm>th_sig,dec.im_segm_,dec.icells)
     vols = nd.sum(dec.im_segm_>0,dec.im_segm_,dec.icells)
     dec.ab_sigs,dec.ab_sigs2,dec.vols=ab_sigs,ab_sigs2,vols
+    
+from scipy import ndimage
+def Xh_to_im(Xh,resc= 10,sx=3000,sy=3000):
+    X = Xh[:,1:3].astype(int)//resc
+    Xf = X[:,0]+sx//resc*X[:,1]
+    Xim = np.indices([sx//resc,sy//resc]).reshape([2,-1]).T
+    Ximf = Xim[:,0]+sx//resc*Xim[:,1]
+    im_sum = ndimage.mean(Xh[:,-1], Xf,Ximf).reshape([sx//resc,sy//resc])
+    return im_sum.astype(np.float32)
+def compute_flat_fields(save_folder=r'\\192.168.0.10\bbfishdc13\DCBBL1_3_2_2023\MERFISH_Analysis',ncols=3,resc=10):
+    for icol in range(ncols):
+        fls = glob.glob(save_folder+os.sep+'*H2_*--col'+str(icol)+'__Xhfits.npz')
+        imf = []
+        for fl in tqdm(fls[:]):
+            imf.append(Xh_to_im(np.load(fl)['Xh'],resc))
+        imf = np.array(imf)
+        imff = np.nanmedian(imf)
+        np.savez(save_folder+os.sep+'med_col'+str(icol)+'.npz',im=imff,resc=resc)
+        
+        
+def example_run():
+    dec.fov,dec.set_ = 'Conv_zscan__111','_set1'
+    for dec.fov,dec.set_ in tqdm(dec.fov_sets):
+        save_fl_final = dec.save_folder+os.sep+'ctspercell_'+dec.fov.split('.')[0]+'--'+dec.set_+'.npz'
+        if not os.path.exists(save_fl_final):
+            try:
+                dec.decoded_fl = dec.save_folder+os.sep+'decoded_'+dec.fov.split('.')[0]+'--'+dec.set_+'.npz'
+                load_segmentation(dec)
+                dec.load_decoded()
+                apply_fine_drift(dec,plt_val=False)
+                for i in range(3):
+                    apply_brightness_correction(dec)
+                get_scores(dec,plt_val=False)
+                dec.th=-0.75
+                #plot_1gene(dec,gene='Gad1',viewer = None)
+
+
+                keepf=  dec.scoreA>-0.75 ### keep good score
+                XHf = np.mean(dec.XH_pruned[keepf],axis=1)
+                icodesf = dec.icodesN[keepf]
+                dec.icells = np.unique(dec.im_segm_)
+                dec.icells = dec.icells[dec.icells>0]
+                cts_all = []
+                gns_all = []
+                for ign,gn in enumerate(tqdm(dec.gns_names)):
+                    Xh = XHf[icodesf==ign]
+                    ctsf = get_counts_per_cell(dec,Xh)
+                    gns_all.append(gn)
+                    cts_all.append(ctsf)
+
+
+                ### get ALdh1l1
+                dec.get_XH_tag(tag='Aldh1')
+                Xh = dec.Xh[dec.Xh[:,-2]==1]
+                Xh = Xh[Xh[:,-3]>4500]
+                ctsf = get_counts_per_cell(dec,Xh)
+                gns_all.append('Aldh1l1')
+                cts_all.append(ctsf)
+                #viewer = plot_points_direct(Xh,gene='Aldh1l1',percentage_max=100)
+                ### get GFP - RNA
+                load_GFP(dec,th_cor=0.25,th_h=2000,th_d=2,plt_val=False)
+
+                ctsf = get_counts_per_cell(dec,dec.Xh1GFP)
+                gns_all.append('GFP_rna')
+                cts_all.append(ctsf)
+
+                ### Get antibody
+
+                get_signal_ab(dec,fld_dapi = r'Y:\DCBBL1_3_15_2023__GFP\H9_MER',
+                              fld_ab= r'Y:\DCBBL1_3_15_2023__GFP\A5_GFPAb_B_B_',th_sig = 5000,sz_drift=20,icol=0)
+
+                gns_all.append('GFP_Ab1_mean')
+                cts_all.append(dec.ab_sigs)
+
+                gns_all.append('GFP_Ab1_th')
+                cts_all.append(dec.ab_sigs2)
+
+                Xcells = nd.center_of_mass(dec.im_segm_>0,dec.im_segm_,dec.icells)
+
+
+                np.savez(save_fl_final,gns_all=gns_all,cts_all=cts_all,vols=dec.vols,Xcells=Xcells,Xfov=[dec.xfov,dec.yfov],icells = dec.icells)
+            except:
+                print("Failed",save_fl_final)

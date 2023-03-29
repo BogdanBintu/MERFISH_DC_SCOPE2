@@ -1,5 +1,5 @@
 
-#cd "C:\Users\BintuLabUser\Scope3AnalysisScripts\MERFISH_spot_analysis\Analysis_1500gns_MERFISH"&&activate cellpose&&python worker_DCBBL1_3_15_2023__GFP__Scope3Analysis
+#cd "C:\Users\BintuLabUser\Scope3AnalysisScripts\MERFISH_spot_analysis\Analysis_1500gns_MERFISH"&&activate cellpose&&python worker_DCBBL1_3_15_2023__GFP__Scope3Analysis.py
 
 from multiprocessing import Pool, TimeoutError
 import time,sys
