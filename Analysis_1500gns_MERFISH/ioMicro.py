@@ -287,6 +287,7 @@ def get_counts_per_cell(self,th_cor=0.5):
     self.good_counts = {c_+self.ifov*10**6:ct_ for c_,ct_ in zip(cells,cts) if c_>0}
     cells,cts = np.unique(icells[(Xh[:,-2]<th_cor)],return_counts=True)
     self.bad_counts = {c_+self.ifov*10**6:ct_ for c_,ct_ in zip(cells,cts) if c_>0}
+from scipy import ndimage as nd
 def get_int_im1_im2(im1,im2,th_int=0.5):
     inters = ((im1>0)&(im2>0)).astype(int)
     im1_in2 = im1*inters
@@ -1962,7 +1963,7 @@ class decoder_simple():
 
         XH = []
         
-        for iH in tqdm(np.arange(len(all_flds))):
+        for iH in np.arange(len(all_flds)):
             fld = all_flds[iH]
             if tag in os.path.basename(fld):
                 for icol in range(ncols):
@@ -1976,7 +1977,7 @@ class decoder_simple():
                     bit = -1#(ih-1)*3+icol
                     if len(Xh):
                         icolR = np.array([[icol,bit]]*len(Xh))
-                        print(icolR.shape,Xh.shape)
+                        #print(icolR.shape,Xh.shape)
                         XH_ = np.concatenate([Xh,icolR],axis=-1)
                         XH.extend(XH_)
         self.Xh = np.array(XH)
@@ -2004,3 +2005,288 @@ class decoder_simple():
             is_code = icode==icodesf
             viewer.add_points(X[is_code],size=size[is_code],face_color=color,name=gene)
         return viewer
+def apply_fine_drift(dec,plt_val=True,npts=50000):
+    bad_igns = [ign for ign,gn in enumerate(dec.gns_names) if 'blank' in gn.lower()]
+    good_igns = [ign for ign,gn in enumerate(dec.gns_names) if 'blank' not in gn.lower()]
+    is_good_gn = np.in1d(dec.icodesN,good_igns)
+    XHG = dec.XH_pruned[is_good_gn]
+    
+    RG = XHG[:,:,-1].astype(int)
+    iRs=np.unique(RG)
+    dic_fine_drift = {}
+    for iR in tqdm(iRs):
+        XHGiR = XHG[np.any(RG==iR,axis=1)]
+        RGiR  = XHGiR[...,-1].astype(int)
+        mH = np.median(XHGiR[:,:,-3],axis=1)
+        XHF = XHGiR[np.argsort(mH)[::-1][:npts]]
+        RF  = XHF[...,-1].astype(int)
+        XHFinR = XHF.copy()
+        XHFiR = XHF.copy()
+        XHFiR[~(RF==iR)]=np.nan
+        XHFinR[(RF==iR)]=np.nan
+        drift = np.mean(np.nanmean(XHFiR[:,:,:3],axis=1)-np.nanmean(XHFinR[:,:,:3],axis=1),axis=0)
+        dic_fine_drift[iR]=drift
+    drift_arr = np.array([dic_fine_drift[iR] for iR in iRs])
+    if plt_val:
+        ncols = len(np.unique(XHG[:,:,-2]))
+        X1 = np.array([dic_fine_drift[iR] for iR in iRs[0::ncols]])
+        X3 = np.array([dic_fine_drift[iR] for iR in iRs[(ncols-1)::ncols]])
+
+        plt.figure()
+        plt.plot(X1[:,0],X3[:,0],'o',label='z-color0-2')
+        plt.plot(X1[:,1],X3[:,1],'o',label='x-color0-2')
+        plt.plot(X1[:,2],X3[:,2],'o',label='y-color0-2')
+
+        plt.xlabel("Drift estimation color 1 (pixels)")
+        plt.ylabel("Drift estimation color 2 (pixels)")
+        plt.legend()
+    dec.drift_arr = drift_arr
+    R = dec.XH_pruned[:,:,-1].astype(int)#
+    dec.XH_pruned[:,:,:3] -= drift_arr[R]
+def apply_brightness_correction(dec,plt_val=True,npts=50000):
+    bad_igns = [ign for ign,gn in enumerate(dec.gns_names) if 'blank' in gn.lower()]
+    good_igns = [ign for ign,gn in enumerate(dec.gns_names) if 'blank' not in gn.lower()]
+    is_good_gn = np.in1d(dec.icodesN,good_igns)
+    #dec.XH_pruned[:,:,4]=dec.XH_pruned[:,:,-3]
+    RT = dec.XH_pruned[:,:,-1].astype(int)
+    XHG = dec.XH_pruned[is_good_gn]
+    RG = XHG[:,:,-1].astype(int)
+    iRs=np.unique(RG)
+    #XHG = dec.XH_pruned[is_good_gn]
+    ratios = []
+    meds = []
+    for iR in tqdm(iRs):
+        hasiR = np.any(RG==iR,axis=1)
+        XHGiR = XHG[hasiR]
+        RGiR  = XHGiR[...,-1].astype(int)
+        mH = np.median(XHGiR[:,:,-3],axis=1)
+        keep_top = np.argsort(mH)[::-1][:npts]
+        XHF = XHGiR[keep_top]
+        RF  = XHF[...,-1].astype(int)
+        XHFinR = XHF.copy()
+        XHFiR = XHF.copy()
+        isR = (RF==iR)
+        XHFiR[~isR]=np.nan
+        XHFinR[isR]=np.nan
+        ratio = np.median(np.nanmean(XHFiR[:,:,4],axis=1)/np.nanmean(XHFinR[:,:,4],axis=1),axis=0)
+        med = np.median(np.nanmean(XHFiR[:,:,4],axis=1))
+        ratios.append(ratio)
+        meds.append(med)
+    ratios = np.array(ratios)
+    meds = np.array(meds)
+    dec.XH_pruned[:,:,4]=dec.XH_pruned[:,:,4]/ratios[RT]/meds[RT]
+def get_scores(dec,plt_val=True):
+    H = np.median(dec.XH_pruned[...,4],axis=1)
+    Hd = np.std(dec.XH_pruned[...,4],axis=1)/H
+    D = dec.XH_pruned[...,:3]-np.mean(dec.XH_pruned[...,:3],axis=1)[:,np.newaxis]
+    D = np.mean(np.linalg.norm(D,axis=-1),axis=-1)
+    score = np.array([H,-D])
+    scoreA = np.argsort(np.argsort(score,axis=-1),axis=-1)+1
+    scoreA = np.sum(np.log(scoreA)-np.log(len(D)),axis=0)
+    dec.scoreA = scoreA
+    if plt_val:
+        bad_igns = [ign for ign,gn in enumerate(dec.gns_names) if 'blank' in gn.lower()]
+        good_igns = [ign for ign,gn in enumerate(dec.gns_names) if 'blank' not in gn.lower()]
+        is_good_gn = np.in1d(dec.icodesN,good_igns)
+        is_gn = dec.icodesN==(list(dec.gns_names).index('Ptbp1'))
+        plt.figure()
+        plt.hist(scoreA[is_good_gn],density=True,bins=100,alpha=0.5,label='all genes')
+        plt.hist(scoreA[is_gn],density=True,bins=100,alpha=0.5,label='Ptbp1')
+        plt.hist(scoreA[~is_good_gn],density=True,bins=100,alpha=0.5,label='blanks');
+        plt.legend()
+def load_segmentation(dec):
+    dec.fl_dapi = glob.glob(dec.save_folder+os.sep+'Segmentation'+os.sep+dec.fov+'*'+dec.set_+'*.npz')[0]
+    dic = np.load(dec.fl_dapi)
+    im_segm = dic['segm']
+    dec.shape = dic['shape']
+    dec.im_segm_=stitch3D(im_segm,niter=5,th_int=0.75)
+    drift_fl = dec.save_folder+os.sep+'drift_'+dec.fov+'--'+dec.set_+'.pkl'
+    drifts,fls,fov = pickle.load(open(drift_fl,'rb'))
+    dec.drifts = np.array([drft[0]for drft in drifts])
+    dec.drifts = drifts
+    tag_dapi = os.path.basename(dec.fl_dapi).split('--')[1]
+    tags_drifts = [os.path.basename(fld)for fld in fls]
+    itag_dapi = tags_drifts.index(tag_dapi)
+    #dec.drifts -= dec.drifts[itag_dapi]
+    dec.drift = dec.drifts[itag_dapi]
+def plot_1gene(self,gene='Gad1',viewer = None):
+    icodesN,XH_pruned = self.icodesN,self.XH_pruned
+    scoreA=self.scoreA
+    th=self.th
+    gns_names = list(self.gns_names)
+    icodesf = icodesN
+    Xcms = np.mean(XH_pruned,axis=1)
+    H = Xcms[:,-3]
+    X = Xcms[:,:3]
+    size = 1+np.clip(H/np.percentile(H,95),0,1)*20
+    
+    if viewer is None:
+        import napari
+        viewer = napari.Viewer()
+
+    icode = gns_names.index(gene)
+    is_code = icode==icodesf
+    viewer.add_points(X[is_code],size=size[is_code],face_color='r',name=gene)
+
+    is_gn = self.icodesN==(list(self.gns_names).index(gene))
+    keep_gn = scoreA[is_gn]>th
+    Xcms = np.mean(self.XH_pruned,axis=1)
+    viewer.add_points(Xcms[is_gn][keep_gn][:,:3],size=10,face_color='g',name=gene)
+    return viewer
+
+def plot_points_direct(Xh,gene='gene',color='g',minsz=0,maxsz=20,percentage_max = 95,viewer=None):
+    H = Xh[:,-3]
+    X = Xh[:,:3]
+    Hmax = np.percentile(H,percentage_max)
+    keep = H>Hmax/10
+    H = Xh[keep,-3]
+    X = Xh[keep,:3]
+    size = minsz+np.clip(H/Hmax,0,1)*maxsz
+    
+    if viewer is None:
+        import napari
+        viewer = napari.Viewer()
+
+    viewer.add_points(X,size=size,face_color=color,name=gene)
+    return viewer
+    
+def load_GFP(dec,th_cor=0.25,th_h=2000,th_d=2,plt_val=True):
+    dec.get_XH_tag(tag='GFP')
+    Xh1 = dec.Xh[dec.Xh[:,-2]==1]
+    Xh2 = dec.Xh[dec.Xh[:,-2]==2]
+    Xh1 = Xh1[Xh1[:,-4]>th_cor]
+    Xh2 = Xh2[Xh2[:,-4]>th_cor]
+    Xh1 = Xh1[Xh1[:,-3]>th_h]
+    Xh2 = Xh2[Xh2[:,-3]>th_h]
+    #viewer = plot_points_direct(Xh1,gene='GFP',color=[0,1,0],minsz=0,maxsz=20,percentage_max = 95,viewer = None)
+    #plot_points_direct(Xh2,gene='GFP',color=[0,0.5,0],minsz=0,maxsz=20,percentage_max = 95,viewer=viewer);
+    from scipy.spatial import KDTree
+    tree = KDTree(Xh1[:,:3])
+    dist,iXh1 = tree.query(Xh2[:,:3])
+    iXh2 = dist<th_d
+    iXh1 = iXh1[iXh2]
+    dec.Xh1GFP,dec.Xh2GFP =Xh1[iXh1],Xh2[iXh2]
+    if plt_val:
+        viewer = None
+        viewer=plot_points_direct(dec.Xh1GFP,gene='GFP',color=[0,1,0],minsz=0,maxsz=20,percentage_max = 95,viewer = viewer)
+        viewer=plot_points_direct(dec.Xh2GFP,gene='GFP',color=[0,0.5,0],minsz=0,maxsz=20,percentage_max = 95,viewer=viewer);
+        return viewer
+        
+        
+def get_counts_per_cell(dec,Xh):
+    tzxy = dec.drift[0]#dec.drift_dapi
+    im_segm = dec.im_segm_
+    dec.shapesm = dec.im_segm_.shape
+    
+    Xcms = Xh[:,:3]-tzxy#?
+    Xred = np.round((Xcms/dec.shape)*dec.shapesm).astype(int)
+    good = ~np.any((Xred>=dec.shapesm)|(Xred<0),axis=-1)
+    Xred = Xred[good]
+    
+    icells,cts = np.unique(im_segm[tuple(Xred.T)],return_counts=True)
+    dic_cts = {icell:ct for icell,ct in zip(icells,cts)}
+    ctsf = np.array([dic_cts.get(icell,0) for icell in dec.icells])
+    return ctsf
+    
+def get_signal_ab(dec,fld_dapi = r'Y:\DCBBL1_3_15_2023__GFP\H9_MER',
+              fld_ab= r'Y:\DCBBL1_3_15_2023__GFP\A5_GFPAb_B_B_',th_sig = 5000,sz_drift=20,icol=0):
+    dec.fl_ab_raw=fld_ab+dec.set_+os.sep+dec.fov+'.zarr'
+    dec.fl_dapi_raw=fld_dapi+dec.set_+os.sep+dec.fov+'.zarr'
+    imab,dec.xfov,dec.yfov = read_im(dec.fl_ab_raw,return_pos=True)
+    ncols,sz,sx,sy = imab.shape
+    imab_ = np.array(imab[-1,(sz-sz_drift)//2:(sz+sz_drift)//2],dtype=np.float32)
+    imdapi = read_im(dec.fl_dapi_raw)
+    imdapi_ = np.array(imdapi[-1,(sz-sz_drift)//2:(sz+sz_drift)//2],dtype=np.float32)
+    dec.im_ab = np.array(imab[icol],dtype=np.float32)
+    txyz,txyzs = get_txyz(imdapi_, imab_, sz_norm=30, sz=300, nelems=5)
+    dec.im_abn = nd.shift(norm_slice(dec.im_ab,s=250),-txyz,order = 0)
+
+    dec.im_abn_sm = resize(dec.im_abn,dec.im_segm_.shape)
+
+    ab_sigs = nd.mean(dec.im_abn_sm,dec.im_segm_,dec.icells)
+    ab_sigs2 = nd.sum(dec.im_abn_sm>th_sig,dec.im_segm_,dec.icells)
+    vols = nd.sum(dec.im_segm_>0,dec.im_segm_,dec.icells)
+    dec.ab_sigs,dec.ab_sigs2,dec.vols=ab_sigs,ab_sigs2,vols
+    
+from scipy import ndimage
+def Xh_to_im(Xh,resc= 10,sx=3000,sy=3000):
+    X = Xh[:,1:3].astype(int)//resc
+    Xf = X[:,0]+sx//resc*X[:,1]
+    Xim = np.indices([sx//resc,sy//resc]).reshape([2,-1]).T
+    Ximf = Xim[:,0]+sx//resc*Xim[:,1]
+    im_sum = ndimage.mean(Xh[:,-1], Xf,Ximf).reshape([sx//resc,sy//resc])
+    return im_sum.astype(np.float32)
+def compute_flat_fields(save_folder=r'\\192.168.0.10\bbfishdc13\DCBBL1_3_2_2023\MERFISH_Analysis',ncols=3,resc=10):
+    for icol in range(ncols):
+        fls = glob.glob(save_folder+os.sep+'*H2_*--col'+str(icol)+'__Xhfits.npz')
+        imf = []
+        for fl in tqdm(fls[:]):
+            imf.append(Xh_to_im(np.load(fl)['Xh'],resc))
+        imf = np.array(imf)
+        imff = np.nanmedian(imf)
+        np.savez(save_folder+os.sep+'med_col'+str(icol)+'.npz',im=imff,resc=resc)
+        
+        
+def example_run():
+    dec.fov,dec.set_ = 'Conv_zscan__111','_set1'
+    for dec.fov,dec.set_ in tqdm(dec.fov_sets):
+        save_fl_final = dec.save_folder+os.sep+'ctspercell_'+dec.fov.split('.')[0]+'--'+dec.set_+'.npz'
+        if not os.path.exists(save_fl_final):
+            try:
+                dec.decoded_fl = dec.save_folder+os.sep+'decoded_'+dec.fov.split('.')[0]+'--'+dec.set_+'.npz'
+                load_segmentation(dec)
+                dec.load_decoded()
+                apply_fine_drift(dec,plt_val=False)
+                for i in range(3):
+                    apply_brightness_correction(dec)
+                get_scores(dec,plt_val=False)
+                dec.th=-0.75
+                #plot_1gene(dec,gene='Gad1',viewer = None)
+
+
+                keepf=  dec.scoreA>-0.75 ### keep good score
+                XHf = np.mean(dec.XH_pruned[keepf],axis=1)
+                icodesf = dec.icodesN[keepf]
+                dec.icells = np.unique(dec.im_segm_)
+                dec.icells = dec.icells[dec.icells>0]
+                cts_all = []
+                gns_all = []
+                for ign,gn in enumerate(tqdm(dec.gns_names)):
+                    Xh = XHf[icodesf==ign]
+                    ctsf = get_counts_per_cell(dec,Xh)
+                    gns_all.append(gn)
+                    cts_all.append(ctsf)
+
+
+                ### get ALdh1l1
+                dec.get_XH_tag(tag='Aldh1')
+                Xh = dec.Xh[dec.Xh[:,-2]==1]
+                Xh = Xh[Xh[:,-3]>4500]
+                ctsf = get_counts_per_cell(dec,Xh)
+                gns_all.append('Aldh1l1')
+                cts_all.append(ctsf)
+                #viewer = plot_points_direct(Xh,gene='Aldh1l1',percentage_max=100)
+                ### get GFP - RNA
+                load_GFP(dec,th_cor=0.25,th_h=2000,th_d=2,plt_val=False)
+
+                ctsf = get_counts_per_cell(dec,dec.Xh1GFP)
+                gns_all.append('GFP_rna')
+                cts_all.append(ctsf)
+
+                ### Get antibody
+
+                get_signal_ab(dec,fld_dapi = r'Y:\DCBBL1_3_15_2023__GFP\H9_MER',
+                              fld_ab= r'Y:\DCBBL1_3_15_2023__GFP\A5_GFPAb_B_B_',th_sig = 5000,sz_drift=20,icol=0)
+
+                gns_all.append('GFP_Ab1_mean')
+                cts_all.append(dec.ab_sigs)
+
+                gns_all.append('GFP_Ab1_th')
+                cts_all.append(dec.ab_sigs2)
+
+                Xcells = nd.center_of_mass(dec.im_segm_>0,dec.im_segm_,dec.icells)
+
+
+                np.savez(save_fl_final,gns_all=gns_all,cts_all=cts_all,vols=dec.vols,Xcells=Xcells,Xfov=[dec.xfov,dec.yfov],icells = dec.icells)
+            except:
+                print("Failed",save_fl_final)

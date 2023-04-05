@@ -10,7 +10,7 @@ def f(set_ifov_iQs=None):
     
         
         try:
-            asm = analysis_smFISH(data_folders = [r'Y:\Glass_MERFISH\CGBB_ChrX_01_31_2023'],
+            asm = analysis_smFISH(data_folders = [r'Y:\Glass_MERFISH\CGBB_ChrX_01_31_2023\H*Q*'],
                      save_folder =r'Y:\Glass_MERFISH\CGBB_ChrX_01_31_2023_Analysis',
                      H0folder=  r'Y:\Glass_MERFISH\CGBB_ChrX_01_31_2023\H0_*',exclude_H0=True)
             if set_ifov_iQs is None:
@@ -62,7 +62,7 @@ if __name__ == '__main__':
         set_ = str(sys.argv[1])
         ifov = int(sys.argv[2])
         iQs = str(sys.argv[3])
-        if iQs[0]=='[' and iQs[-1]==']': iQs=eval(iQs)
+        if (iQs[0]=='[' and iQs[-1]==']') or iQs=="None": iQs=eval(iQs)
         set_ifov_iQs = (set_,ifov,iQs)
         f(set_ifov_iQs)
     elif n==1:
@@ -76,8 +76,8 @@ if __name__ == '__main__':
         items = [(set_,ifov,None)for set_,nfov in zip(sets_,ifovs)
                                 for ifov in range(nfov)]
         print(items)
-        f(items[40])
-        if False:
+        #f(items[40])
+        if True:
             with Pool(processes=6) as pool:
                 print('starting pool')
                 start = time.time()

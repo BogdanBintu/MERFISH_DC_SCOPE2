@@ -10,7 +10,7 @@ def f(set_ifov_iQs=None):
     
         
         try:
-            asm = analysis_smFISH(data_folders = [r'Y:\Glass_MERFISH\CGBB_ChrX_01_31_2023'],
+            asm = analysis_smFISH(data_folders = [r'Y:\Glass_MERFISH\CGBB_ChrX_01_31_2023\H*Q*'],
                      save_folder =r'Y:\Glass_MERFISH\CGBB_ChrX_01_31_2023_Analysis',
                      H0folder=  r'Y:\Glass_MERFISH\CGBB_ChrX_01_31_2023\H0_*',exclude_H0=True)
             if set_ifov_iQs is None:
@@ -62,12 +62,13 @@ if __name__ == '__main__':
         set_ = str(sys.argv[1])
         ifov = int(sys.argv[2])
         iQs = str(sys.argv[3])
-        if iQs[0]=='[' and iQs[-1]==']': iQs=eval(iQs)
+        if (iQs[0]=='[' and iQs[-1]==']') or iQs=="None": iQs=eval(iQs)
         set_ifov_iQs = (set_,ifov,iQs)
         f(set_ifov_iQs)
     elif n==1:
         asm = f(set_ifov_iQs=None)
-        sets_sel = ['_C','_AD']
+        #sets_sel = ['_C','_AD']
+        sets_sel = ['_AD']
         sets_ = np.array(['_'+os.path.dirname(fl).split('_')[-1]for fl in asm.fls_bk])
         #sets_,ifovs = np.unique(sets_,return_counts=True)
         ifovs = [np.sum(sets_==set_) for set_ in sets_sel]
