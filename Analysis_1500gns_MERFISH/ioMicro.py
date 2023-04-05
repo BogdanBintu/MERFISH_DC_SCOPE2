@@ -1928,6 +1928,7 @@ class decoder_simple():
     def load_decoded(self):
         import time
         start= time.time()
+        self.decoded_fl = self.save_folder+os.sep+'decoded_'+self.fov.split('.')[0]+'--'+self.set_+'.npz'
         self.XH_pruned = np.load(self.decoded_fl)['XH_pruned']
         self.icodesN = np.load(self.decoded_fl)['icodesN']
         self.gns_names = np.load(self.decoded_fl)['gns_names']
@@ -2094,6 +2095,7 @@ def get_scores(dec,plt_val=True):
         plt.hist(scoreA[is_gn],density=True,bins=100,alpha=0.5,label='Ptbp1')
         plt.hist(scoreA[~is_good_gn],density=True,bins=100,alpha=0.5,label='blanks');
         plt.legend()
+        
 def load_segmentation(dec):
     dec.fl_dapi = glob.glob(dec.save_folder+os.sep+'Segmentation'+os.sep+dec.fov+'*'+dec.set_+'*.npz')[0]
     dic = np.load(dec.fl_dapi)
@@ -2133,7 +2135,31 @@ def plot_1gene(self,gene='Gad1',viewer = None):
     Xcms = np.mean(self.XH_pruned,axis=1)
     viewer.add_points(Xcms[is_gn][keep_gn][:,:3],size=10,face_color='g',name=gene)
     return viewer
+def plot_multigenes(self,genes=['Gad1','Sox9'],colors=['r','g','b','m','c','y','w'],smin=3,smax=10,viewer = None,
+                    drift=[0,0,0],resc=[1,1,1]):
+    icodesN,XH_pruned = self.icodesN,self.XH_pruned
+    scoreA=self.scoreA
+    th=self.th
+    gns_names = list(self.gns_names)
+    
+    Xcms = np.mean(XH_pruned,axis=1)
+    keep = scoreA>th
+    X = (Xcms[:,:3][keep]-drift)/resc  
+    H = scoreA[keep]
+    H -= np.min(H)
+    icodesf = icodesN[keep]
+    size = smin+np.clip(H/np.max(H),0,1)*(smax-smin)
+    
+    if viewer is None:
+        import napari
+        viewer = napari.Viewer()
+    for igene,gene in enumerate(genes):
+        color= colors[igene%len(colors)]
+        icode = gns_names.index(gene)
+        is_code = icode==icodesf
+        viewer.add_points(X[is_code],size=size[is_code],face_color=color,name=gene)
 
+    return viewer
 def plot_points_direct(Xh,gene='gene',color='g',minsz=0,maxsz=20,percentage_max = 95,viewer=None):
     H = Xh[:,-3]
     X = Xh[:,:3]
@@ -2172,7 +2198,17 @@ def load_GFP(dec,th_cor=0.25,th_h=2000,th_d=2,plt_val=True):
         viewer=plot_points_direct(dec.Xh2GFP,gene='GFP',color=[0,0.5,0],minsz=0,maxsz=20,percentage_max = 95,viewer=viewer);
         return viewer
         
-        
+def get_cell_id(dec,Xh):
+    tzxy = dec.drift[0]#dec.drift_dapi
+    im_segm = dec.im_segm_
+    dec.shapesm = dec.im_segm_.shape
+    
+    Xcms = Xh[:,:3]-tzxy#?
+    Xred = np.round((Xcms/dec.shape)*dec.shapesm).astype(int)
+    good = ~np.any((Xred>=dec.shapesm)|(Xred<0),axis=-1)
+    Xred = Xred[good]
+    return im_segm[tuple(Xred.T)],good
+    
 def get_counts_per_cell(dec,Xh):
     tzxy = dec.drift[0]#dec.drift_dapi
     im_segm = dec.im_segm_
@@ -2223,10 +2259,48 @@ def compute_flat_fields(save_folder=r'\\192.168.0.10\bbfishdc13\DCBBL1_3_2_2023\
         for fl in tqdm(fls[:]):
             imf.append(Xh_to_im(np.load(fl)['Xh'],resc))
         imf = np.array(imf)
-        imff = np.nanmedian(imf)
+        imff = np.nanmedian(imf,axis=0)
         np.savez(save_folder+os.sep+'med_col'+str(icol)+'.npz',im=imff,resc=resc)
-        
-        
+def norm_brightness(dec,Xh):
+    ### renormalize the brightness according to flatfield
+    Icol = Xh[:,-2].astype(int)
+    H = Xh[:,-3].copy()
+    cols=np.unique(Icol)
+    for icol in cols:
+        keep = Icol==icol
+        immed = dec.immeds[icol].copy()
+        immed = immed/np.median(immed)
+        x_,y_ = ((Xh[keep][:,1:3]/dec.resc).astype(int)%immed.shape).T
+        norm_ = immed[x_,y_] 
+        H[keep]=H[keep]/norm_
+    Xh[:,-3] = H
+    return Xh
+def apply_flat_field(dec):
+    ### load the immeds
+    Icol = dec.XH_pruned[:,:,-2].astype(int)
+    uIcols = np.unique(Icol)
+    dec.ncols = len(uIcols)
+    save_folder=dec.save_folder#r'\\192.168.0.10\bbfishdc13\DCBBL1_3_2_2023\MERFISH_Analysis'
+    immeds = []
+    for icol in range(dec.ncols):
+        dic = np.load(save_folder+os.sep+'med_col'+str(icol)+'.npz')
+        immed,resc=dic['im'],dic['resc']
+        immeds.append(immed)
+    dec.immeds = np.array(immeds)
+    dec.resc = resc
+    
+    ### renormalize the brightness according to flatfield
+    XH = dec.XH_pruned
+    Icol = XH[:,:,-2].astype(int)
+    H = dec.XH_pruned[:,:,-3].copy()
+    for icol in range(dec.ncols):
+        keep = Icol==icol
+        immed = dec.immeds[icol].copy()
+        immed = immed/np.median(immed)
+        x_,y_ = ((XH[keep][:,1:3]/dec.resc).astype(int)%immed.shape).T
+        norm_ = immed[x_,y_] 
+        H[keep]=H[keep]/norm_
+    dec.XH_pruned[:,:,-3] = H
 def example_run():
     dec.fov,dec.set_ = 'Conv_zscan__111','_set1'
     for dec.fov,dec.set_ in tqdm(dec.fov_sets):
@@ -2290,3 +2364,21 @@ def example_run():
                 np.savez(save_fl_final,gns_all=gns_all,cts_all=cts_all,vols=dec.vols,Xcells=Xcells,Xfov=[dec.xfov,dec.yfov],icells = dec.icells)
             except:
                 print("Failed",save_fl_final)
+def plot_statistics(dec):
+    ncells = len(np.unique(dec.im_segm_))-1
+    icds,ncds = np.unique(dec.icodesN[dec.scoreA>-1],return_counts=True)
+    good_igns = [ign for ign,gn in enumerate(dec.gns_names) if 'blank' not in gn.lower()]
+    kp = np.in1d(icds,good_igns)
+    ncds = ncds/ncells
+    plt.figure()
+    plt.xlabel('Genes')
+    plt.plot(icds[kp],ncds[kp],label='genes')
+    plt.plot(icds[~kp],ncds[~kp],label='blank')
+    plt.ylabel('Number of molecules in the fov')
+    plt.title(str(np.round(np.mean(ncds[~kp])/np.mean(ncds[kp]),3)))
+    plt.legend()
+def get_xyfov(dec):
+    drifts,fls,fov = pickle.load(open(dec.drift_fl,'rb'))
+    fl = fls[0]+os.sep+dec.fov.replace('.zarr','')+'.xml'
+    txt = open(fl,'r').read()
+    dec.xfov,dec.yfov = eval(txt.split('<stage_position type="custom">')[-1].split('<')[0])
